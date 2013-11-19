@@ -184,8 +184,8 @@ else:
     #             classpath (as part of work Patrick is doing), instead of
     #             just looking for spark/target.
     assert os.path.exists(
-        "%s/spark/core/target" % proj_dir), ("You chose to skip Spark prep, but we can't since " +
-        "%s/spark/target does not exist, so Spark needs to be rebuilt/packaged." % proj_dir)
+        "%s/core/target" % config.SPARK_HOME_DIR), ("You chose to skip Spark prep, but we can't since " +
+        "%s/core/target does not exist, so Spark needs to be rebuilt/packaged." % config.SPARK_HOME_DIR)
     print("Skipping preparation tasks for Spark (i.e, git clone or update, checkout, build, " +
         "copy conf files).")
 
@@ -282,9 +282,9 @@ run_cmds_parallel([(make_rsync_cmd(proj_dir, slave), True) for slave in slaves_l
 
 # Start our Spark cluster.
 print("Starting a Spark standalone cluster to use for testing...")
-assert os.path.exists("%s/spark/bin/start-all.sh" % proj_dir), ("%s/spark/bin/start-all.sh must "
+assert os.path.exists("%s/bin/start-all.sh" % config.SPARK_HOME_DIR), ("%s/spark/bin/start-all.sh must "
     "exist") % proj_dir
-run_cmd("%s/spark/bin/start-all.sh" % proj_dir)
+run_cmd("%s/bin/start-all.sh" % config.SPARK_HOME_DIR)
 time.sleep(5) # Starting the cluster takes a little time so give it a second.
 
 # Set Spark Java Options (from config.py)

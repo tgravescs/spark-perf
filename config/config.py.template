@@ -60,6 +60,14 @@ SPARK_CLUSTER_URL = open("/root/spark-ec2/cluster-url", 'r').readline().strip()
 # Command used to launch Scala.
 SCALA_CMD = "scala"
 
+JAVA_CMD = "java"
+
+# Hadoop conf dir - used for the on yarn tests
+HADOOP_CONF_DIR = ""
+
+# spark jar - used for the on yarn tests
+SPARK_JAR = SPARK_HOME_DIR + "/assembly/target/scala-2.9.3/spark-assembly_2.9.3-0.9.0-incubating-SNAPSHOT-hadop0.23.9.jar
+
 # The default values configured below are appropriate for approximately 20 m1.xlarge nodes, in which
 # each node has 15 GB of memory.
 # Use this variable to scale the values (e.g. number of records in a generated dataset) if you are
@@ -145,6 +153,13 @@ SHARK_TABLE_STORAGE_OPTS = [
     # Supported compression types: "rle", "dictionary", "rle-variant", and "default".
     # Tables are uncompressed by default.
     OptionSet("column-compression-type", ["default"])
+]
+
+YARN_OPTS = [
+    YarnOptionSet("num-workers", [1]),
+    YarnOptionSet("worker-memory", ["9g"]),
+    YarnOptionSet("worker-cores", [2]),
+    YarnOptionSet("master-memory", ["9g"])
 ]
 
 # Test setup

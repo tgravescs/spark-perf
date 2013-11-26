@@ -1,0 +1,256 @@
+#!/usr/bin/env python
+
+import argparse
+import itertools
+from math import sqrt
+import os.path
+import re
+from subprocess import Popen, PIPE
+import sys
+import threading
+import time
+
+# The perf-tests project directory.
+proj_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sbt_cmd = "sbt/sbt"
+
+parser = argparse.ArgumentParser(description='Run Spark or Shark peformance tests. Before running, '
+    'edit the supplied configuration file.')
+
+parser.add_argument('--config-file', help='override default location of config file, must be a '
+    'python file that ends in .py', default="%s/config/config.py" % proj_dir)
+
+args = parser.parse_args()
+assert args.config_file.endswith(".py"), "config filename must end with .py"
+
+# Check if the config file exists.
+assert os.path.isfile(args.config_file), ("Please create a config file called %s (you probably "
+    "just want to copy and then modify %s/config/config.py.template)" %
+    (args.config_file, proj_dir))
+
+print "Detected project directory: %s" % proj_dir
+# Import the configuration settings from the config file.
+print("Adding %s to sys.path" % os.path.dirname(args.config_file))
+sys.path.append(os.path.dirname(args.config_file))
+print("running 'import %s'" % os.path.basename(args.config_file).split(".")[0])
+exec("import %s" % os.path.basename(args.config_file).split(".")[0])
+
+# Spark will always be built, assuming that any possible test run of this program is going to depend
+# on Spark.
+has_spark_tests = (len(config.SPARK_TESTS) > 0)
+should_prep_spark = not config.SPARK_SKIP_PREP
+
+# Shark perf tests depend on Spark perf test code (e.g. uses spark.perf.PerfTest trait).
+should_prep_spark_tests = (has_spark_tests) and not config.SPARK_SKIP_TEST_PREP
+
+# Check that commit ID's are specified in config_file.
+if should_prep_spark:
+    assert config.SPARK_COMMIT_ID is not "", \
+        ("Please specify SPARK_COMMIT_ID in %s" % args.config_file)
+
+# Run shell command and ignore output.
+def run_cmd(cmd, exit_on_fail=True):
+    if cmd.find(";") != -1:
+        print("***************************")
+        print("WARNING: the following command contains a semicolon which may cause non-zero return "
+            "values to be ignored. This isn't necessarily a problem, but proceed with caution!")
+    print(cmd)
+    return_code = Popen(cmd, stdout=sys.stderr, shell=True).wait()
+    if exit_on_fail:
+        if return_code != 0:
+            print "The following shell command finished with a non-zero returncode (%s): %s" % (
+                return_code, cmd)
+            sys.exit(-1)
+    return return_code
+
+# Run several commands in parallel, waiting for them all to finish.
+# Expects an array of tuples, where each tuple consists of (command_name, exit_on_fail).
+def run_cmds_parallel(commands):
+    threads = []
+    for (cmd_name, exit_on_fail) in commands:
+        thread = threading.Thread(target=run_cmd, args=(cmd_name, exit_on_fail))
+        thread.start()
+        threads = threads + [thread]
+    for thread in threads:
+        thread.join()
+
+# Return a command running cmd_name on host with proper SSH configs.
+def make_ssh_cmd(cmd_name, host):
+    return "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 %s '%s'" % (host, cmd_name)
+
+# Prepare Spark.
+if should_prep_spark:
+    # Assumes that the preexisting 'spark' directory is valid.
+    if not os.path.isdir("spark"):
+        # Clone Spark.
+        print("Git cloning Spark...")
+        run_cmd("git clone %s spark" % config.SPARK_GIT_REPO)
+        run_cmd("cd spark; git config --add remote.origin.fetch "
+            "'+refs/pull/*/head:refs/remotes/origin/pr/*'")
+
+    # Fetch updates.
+    os.chdir("spark")
+    print("Updating Spark repo...")
+    run_cmd("git fetch")
+
+    # Build Spark.
+    print("Cleaning Spark and building branch %s. This may take a while...\n" %
+        config.SPARK_COMMIT_ID)
+    run_cmd("git clean -f -d -x")
+
+    if config.SPARK_MERGE_COMMIT_INTO_MASTER:
+        run_cmd("git reset --hard master")
+        run_cmd("git merge %s -m ='Merging %s into master.'" %
+            (config.SPARK_COMMIT_ID, config.SPARK_COMMIT_ID))
+    else:
+        run_cmd("git reset --hard %s" % config.SPARK_COMMIT_ID)
+
+    run_cmd("%s clean assembly/assembly" % sbt_cmd)
+
+    # Copy Spark configuration files to new directory.
+    print("Copying all files from %s to %s/spark/conf/" % (config.SPARK_CONF_DIR, proj_dir))
+    assert os.path.exists("%s/spark-env.sh" % config.SPARK_CONF_DIR), \
+        "Could not find required file %s/spark-env.sh" % config.SPARK_CONF_DIR
+    assert os.path.exists("%s/slaves" % config.SPARK_CONF_DIR), \
+        "Could not find required file %s/slaves" % config.SPARK_CONF_DIR
+    run_cmd("cp %s/* %s/spark/conf/" % (config.SPARK_CONF_DIR, proj_dir))
+
+    # Change back to 'proj_dir' directory.
+    os.chdir("..")
+else:
+    # TODO(andy): Make this check for the jar we will be including on the
+    #             classpath (as part of work Patrick is doing), instead of
+    #             just looking for spark/target.
+    assert os.path.exists(
+        "%s/core/target" % config.SPARK_HOME_DIR), ("You chose to skip Spark prep, but we can't since " +
+        "%s/core/target does not exist, so Spark needs to be rebuilt/packaged." % config.SPARK_HOME_DIR)
+    print("Skipping preparation tasks for Spark (i.e, git clone or update, checkout, build, " +
+        "copy conf files).")
+
+# Build the tests for each project based on copies cloned to the 'proj_dir'.
+spark_work_dir = "%s/spark/work" % proj_dir
+
+print("Building perf tests...")
+if should_prep_spark_tests:
+    run_cmd("cd %s/spark-tests; %s clean assembly" % (proj_dir, sbt_cmd))
+else:
+    spark_test_jar_path = "%s/spark-tests/target/spark-perf-tests-assembly.jar" % proj_dir
+    assert os.path.exists(spark_test_jar_path), ("You tried to skip packaging the Spark perf " +
+        "tests, but %s was not already present") % spark_test_jar_path
+
+
+# Set Spark Java Options (from config.py)
+new_env = os.environ.copy()
+
+#new_env["SPARK_HOME"] = "%s/spark" % proj_dir
+new_env["SPARK_HOME"] = "%s" % config.SPARK_HOME_DIR
+
+path_to_env_file = "%s/spark-env.sh" % config.SPARK_CONF_DIR
+
+env_file_content = open(path_to_env_file, 'r').read()
+
+# Some utility functions to calculate useful stats on test output.
+def average(in_list):
+    return sum(in_list) / len(in_list)
+
+def variance(in_list):
+    variance = 0
+    for x in in_list:
+        variance = variance + (average(in_list) - x) ** 2
+    return variance / len(in_list)
+
+# Run all tests specified in 'tests_to_run', a list of 5-element tuples. See the 'Test Setup'
+# section in config.py.template for more info.
+# Results are written as CSVs to 'output_filename'.
+def run_tests_yarn(scala_cmd_classpath, tests_to_run, test_group_name, output_filename):
+    out_file = open(output_filename, 'w')
+    stderr_file = open("%s.stderr" % output_filename, 'w')
+    num_tests_to_run = len(tests_to_run)
+
+    output_divider_string = "\n--------------------------------------------------------------------"
+    print(output_divider_string)
+    print("Running %d tests in %s.\n" % (num_tests_to_run, test_group_name))
+
+    scala_cmd_classpath_plus = "%s:%s:%s" % (scala_cmd_classpath, config.SPARK_JAR, config.HADOOP_CONF_DIR)
+
+    # only expect one set of options for now so just combine into string
+    yarn_opts_arrays = [i.to_array(1.0) for i in config.YARN_OPTS]
+    yarn_opt_str = ""
+    for yarn_opt_list in itertools.product(*yarn_opts_arrays):
+        yarn_opt_str += " ".join(yarn_opt_list)
+
+    print("\nRemoving hdfs file: %s" % os.path.basename(scala_cmd_classpath))
+    run_cmd("hadoop fs -rm -skipTrash %s" % os.path.basename(scala_cmd_classpath), False)
+    print("\nUploading file to hdfs: %s" % scala_cmd_classpath)
+    run_cmd("hadoop fs -put %s" % scala_cmd_classpath)
+   
+    for short_name, test_cmd, scale_factor, java_opt_sets, opt_sets in tests_to_run:
+ 
+        print(output_divider_string)
+        print("Running test command: '%s' ..." % test_cmd)
+        # Run a test for all combinations of the OptionSets given, then capture
+        # and print the output.
+        java_opt_set_arrays = [i.to_array(scale_factor) for i in java_opt_sets]
+        opt_set_arrays = [i.to_array(scale_factor) for i in opt_sets]
+        for java_opt_list in itertools.product(*java_opt_set_arrays):
+     
+            for opt_list in itertools.product(*opt_set_arrays):
+                #ensure_spark_stopped_on_slaves(slaves_list)
+                results_token = "results: "
+                app_token = "application identifier: "
+                # TODO(andy): Add a timout on the subprocess.
+                (testclass, testarg) = test_cmd.split(" ")
+                opt_list_no_empty = filter(lambda x: not x is "", opt_list)
+
+                cmd = "%s %s -cp %s org.apache.spark.deploy.yarn.Client --jar %s --class %s --args %s --args yarn-standalone --args %s --addJars %s %s" % (config.JAVA_CMD, " ".join(java_opt_list), scala_cmd_classpath_plus,  scala_cmd_classpath, testclass, testarg, " --args ".join(opt_list_no_empty), os.path.basename(scala_cmd_classpath), yarn_opt_str)
+
+                print("\nrunning command: %s\n" % cmd)
+                output = Popen(cmd, stderr=PIPE, shell=True, env=new_env).stderr.read()
+                if app_token not in output:
+                    print("Test did not produce app id. Output was:")
+                    print(output)
+                    sys.exit(1)
+                result_lines = filter(lambda x: app_token in x, output.split("\n"))
+                appid = result_lines[len(result_lines)-1].replace(app_token, "").strip()
+
+                stderr_file.write(output + "\n")
+                stderr_file.flush()
+                sys.stderr.flush()
+                # give it time to aggregate logs
+                time.sleep(20)
+                #run_cmd("yarn logs --applicationId %s | grep results" % appid)
+                logs_cmd = "yarn logs --applicationId %s | grep results" % appid
+                result_output = Popen(logs_cmd, stdout=PIPE, shell=True, env=new_env).stdout.read()
+                print("result output is %s" % result_output)
+                result_list = result_output.replace(results_token, "").split(",")
+                print("results list is: %s" % " ".join(result_list))
+                assert len(result_list) > config.IGNORED_TRIALS, ("Expecting at least %s results "
+                    "but only found %s" % (config.IGNORED_TRIALS + 1, len(result_list)))
+                result_list = result_list[config.IGNORED_TRIALS:]
+                result_first = result_list[0]
+                result_last = result_list[len(result_list) - 1]
+
+                # TODO(andy): For even cardinality lists, return average of middle two elts.
+                result_list = sorted([float(x) for x in result_list])
+                result_med = result_list[len(result_list)/2]
+                result_std = sqrt(variance(result_list))
+                result_min = min(result_list)
+                result_string = "%s, %s, %s, %.3f, %s, %s, %s" % (short_name, " ".join(opt_list),
+                    result_med, result_std, result_min, result_first, result_last)
+                print(result_string)
+                out_file.write(result_string + "\n")
+                out_file.flush()
+
+    print("\nFinished running tests removing hdfs file %s" % scala_cmd_classpath)
+    run_cmd("hadoop fs -rm -skipTrash %s" % os.path.basename(scala_cmd_classpath), False)
+    print("\nFinished running %d tests in %s.\nSee CSV output in %s" %
+        (num_tests_to_run, test_group_name, output_filename))
+    print(output_divider_string)
+
+# Run all Spark and/or Shark tests specified in the Config file.
+scala_cmd_classpath = "%s/spark-tests/target/spark-perf-tests-assembly.jar" % proj_dir
+if has_spark_tests:
+    #run_tests(scala_cmd_classpath, config.SPARK_TESTS, "Spark-Tests", config.SPARK_OUTPUT_FILENAME)
+    run_tests_yarn(scala_cmd_classpath, config.SPARK_TESTS, "Spark-Tests", config.SPARK_OUTPUT_FILENAME)
+
+print("Finished running all tests.")

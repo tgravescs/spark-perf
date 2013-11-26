@@ -21,6 +21,13 @@ class OptionSet(object):
         """
         return ["--%s=%s" % (self.name, val) for val in self.scaled_vals(scale_factor)]
 
+class YarnOptionSet(OptionSet):
+    def __init__(self, name, vals, can_scale=False):
+        OptionSet.__init__(self, name, vals, can_scale)
+
+    def to_array(self, scale_factor = 1.0):
+        """Return array of strings each representing a yarn option to spark Client."""
+        return ["--%s %s" % (self.name, val) for val in self.scaled_vals(scale_factor)]
 
 class JavaOptionSet(OptionSet):
     def __init__(self, name, vals, can_scale=False):

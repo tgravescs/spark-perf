@@ -18,3 +18,6 @@ Might want to update these:
 SKIP_SPARK_PREP = True
 SKIP_TEST_PREP = True
 SKIP_DISK_WARMUP = True
+
+If you are not skipping the spark pref: SPARK_SKIP_PREP = False, you may want to set SPARK_HOME_DIR
+to be spark-perf/spark

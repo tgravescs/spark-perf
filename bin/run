@@ -131,9 +131,9 @@ if os.path.exists("%s/bin/stop-all.sh" % config.SPARK_HOME_DIR):
     run_cmd("%s/bin/stop-all.sh" % config.SPARK_HOME_DIR)
 
 # If a cluster is already running from an earlier test, try shutting it down.
-if os.path.exists("%s/spark/bin/stop-all.sh" % proj_dir):
+if os.path.exists("%s/bin/stop-all.sh" % config.SPARK_HOME_DIR):
     print("Stopping Spark standalone cluster...")
-    run_cmd("%s/spark/bin/stop-all.sh" % proj_dir)
+    run_cmd("%s/bin/stop-all.sh" % config.SPARK_HOME_DIR)
 
 # Ensure all shutdowns have completed (no executors are running).
 ensure_spark_stopped_on_slaves(slaves_list)
@@ -290,7 +290,7 @@ time.sleep(5) # Starting the cluster takes a little time so give it a second.
 # Set Spark Java Options (from config.py)
 new_env = os.environ.copy()
 
-new_env["SPARK_HOME"] = "%s/spark" % proj_dir
+new_env["SPARK_HOME"] = "%s" % config.SPARK_HOME_DIR
 
 # Search for 'spark.local.dir' in spark-env.sh, or shark-env.sh if Shark is also being built. Note
 # that for the latter case, 'spark.local.dir' in shark-env.sh takes precedence.
@@ -415,6 +415,6 @@ if has_shark_tests:
     run_tests(scala_cmd_classpath, config.SHARK_TESTS, "Shark-Tests", config.SHARK_OUTPUT_FILENAME)
 
 print("All tests have finished running. Stopping Spark standalone cluster ...")
-run_cmd("%s/spark/bin/stop-all.sh" % proj_dir)
+run_cmd("%s/bin/stop-all.sh" % config.SPARK_HOME_DIR)
 
 print("Finished running all tests.")

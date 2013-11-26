@@ -117,15 +117,6 @@ if should_prep_spark:
 
     # Change back to 'proj_dir' directory.
     os.chdir("..")
-else:
-    # TODO(andy): Make this check for the jar we will be including on the
-    #             classpath (as part of work Patrick is doing), instead of
-    #             just looking for spark/target.
-    assert os.path.exists(
-        "%s/core/target" % config.SPARK_HOME_DIR), ("You chose to skip Spark prep, but we can't since " +
-        "%s/core/target does not exist, so Spark needs to be rebuilt/packaged." % config.SPARK_HOME_DIR)
-    print("Skipping preparation tasks for Spark (i.e, git clone or update, checkout, build, " +
-        "copy conf files).")
 
 # Build the tests for each project based on copies cloned to the 'proj_dir'.
 spark_work_dir = "%s/spark/work" % proj_dir
@@ -171,7 +162,7 @@ def run_tests_yarn(scala_cmd_classpath, tests_to_run, test_group_name, output_fi
     print(output_divider_string)
     print("Running %d tests in %s.\n" % (num_tests_to_run, test_group_name))
 
-    scala_cmd_classpath_plus = "%s:%s:%s" % (scala_cmd_classpath, config.SPARK_JAR, config.HADOOP_CONF_DIR)
+    scala_cmd_classpath_plus = "%s:%s" % (config.SPARK_JAR, config.HADOOP_CONF_DIR)
 
     # only expect one set of options for now so just combine into string
     yarn_opts_arrays = [i.to_array(1.0) for i in config.YARN_OPTS]
